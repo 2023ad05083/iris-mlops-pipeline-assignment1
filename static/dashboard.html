@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iris ML API - Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .metric-label {
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .healthy {
+            background-color: #4CAF50;
+        }
+
+        .warning {
+            background-color: #FF9800;
+        }
+
+        .error {
+            background-color: #F44336;
+        }
+
+        .refresh-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+
+        .refresh-btn:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌸 Iris ML API - Monitoring Dashboard</h1>
+            <p>Real-time monitoring and metrics for the Iris classification model</p>
+            <button class="refresh-btn" onclick="refreshData()">🔄 Refresh Data</button>
+            <span id="lastUpdated">Last updated: --</span>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value" id="totalPredictions">--</div>
+                <div class="metric-label">Total Predictions (24h)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="avgConfidence">--</div>
+                <div class="metric-label">Average Confidence</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="avgResponseTime">--</div>
+                <div class="metric-label">Avg Response Time (ms)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="uptime">--</div>
+                <div class="metric-label">System Uptime</div>
+            </div>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="chart-container">
+                <h3>Prediction Distribution</h3>
+                <canvas id="predictionChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>API Endpoint Performance</h3>
+                <canvas id="performanceChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h3>System Health Status</h3>
+            <div id="healthStatus">
+                <p><span class="status-indicator healthy"></span>API Service: <span id="apiStatus">Checking...</span>
+                </p>
+                <p><span class="status-indicator healthy"></span>Model: <span id="modelStatus">Checking...</span></p>
+                <p><span class="status-indicator healthy"></span>Database: <span id="dbStatus">Checking...</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let predictionChart, performanceChart;
+
+        async function fetchData() {
+            try {
+                const response = await fetch('/monitoring/dashboard');
+                const data = await response.json();
+                updateDashboard(data);
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        }
+
+        function updateDashboard(data) {
+            // Update metrics cards
+            document.getElementById('totalPredictions').textContent =
+                data.predictions.total_predictions || 0;
+
+            document.getElementById('avgConfidence').textContent =
+                (data.predictions.avg_confidence * 100).toFixed(1) + '%' || '--';
+
+            document.getElementById('avgResponseTime').textContent =
+                Math.round(data.predictions.avg_response_time) || '--';
+
+            document.getElementById('uptime').textContent =
+                formatUptime(data.system.uptime_seconds);
+
+            // Update charts
+            updatePredictionChart(data.predictions.prediction_distribution);
+            updatePerformanceChart(data.api_metrics);
+
+            // Update last updated time
+            document.getElementById('lastUpdated').textContent =
+                'Last updated: ' + new Date().toLocaleTimeString();
+        }
+
+        function updatePredictionChart(distribution) {
+            const ctx = document.getElementById('predictionChart').getContext('2d');
+
+            if (predictionChart) {
+                predictionChart.destroy();
+            }
+
+            predictionChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(distribution || {}),
+                    datasets: [{
+                        data: Object.values(distribution || {}),
+                        backgroundColor: [
+                            '#FF6384',
+                            '#36A2EB',
+                            '#FFCE56'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+
+        function updatePerformanceChart(apiMetrics) {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+
+            if (performanceChart) {
+                performanceChart.destroy();
+            }
+
+            performanceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: apiMetrics.map(m => m.endpoint),
+                    datasets: [{
+                        label: 'Avg Response Time (ms)',
+                        data: apiMetrics.map(m => m.avg_response_time),
+                        backgroundColor: '#36A2EB'
+                    }, {
+                        label: 'Request Count',
+                        data: apiMetrics.map(m => m.request_count),
+                        backgroundColor: '#FF6384',
+                        yAxisID: 'y1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                        }
+                    }
+                }
+            });
+        }
+
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+
+            if (days > 0) {
+                return `${days}d ${hours}h ${minutes}m`;
+            } else if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            } else {
+                return `${minutes}m`;
+            }
+        }
+
+        function refreshData() {
+            fetchData();
+        }
+
+        // Initial load and auto-refresh every 30 seconds
+        fetchData();
+        setInterval(fetchData, 30000);
+    </script>
+</body>
+
+</html>

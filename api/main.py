@@ -21,12 +21,49 @@ from api.schemas import (
     MetricsResponse,
 )
 
+# Enhanced monitoring imports (add these if files exist, otherwise comment out)
+try:
+    from api.middleware import MonitoringMiddleware
+
+    MONITORING_MIDDLEWARE_AVAILABLE = True
+except ImportError:
+    MONITORING_MIDDLEWARE_AVAILABLE = False
+    print("MonitoringMiddleware not available - continuing without advanced middleware")
+
+try:
+    from src.utils.prometheus_metrics import metrics_collector
+
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    print("Prometheus metrics not available - continuing without Prometheus")
+
+try:
+    from src.utils.monitoring_db import MonitoringDB
+
+    MONITORING_DB_AVAILABLE = True
+except ImportError:
+    MONITORING_DB_AVAILABLE = False
+    print("MonitoringDB not available - using basic SQLite logging")
+
+try:
+    from src.utils.logging_config import setup_logging
+
+    ENHANCED_LOGGING_AVAILABLE = True
+except ImportError:
+    ENHANCED_LOGGING_AVAILABLE = False
+    print("Enhanced logging not available - using basic logging")
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("logs/api.log"), logging.StreamHandler()],
-)
+if ENHANCED_LOGGING_AVAILABLE:
+    setup_logging()
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler("logs/api.log"), logging.StreamHandler()],
+    )
+
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -45,8 +82,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Add monitoring middleware if available
+if MONITORING_MIDDLEWARE_AVAILABLE:
+    app.add_middleware(MonitoringMiddleware)
+
+# Mount static files (only if directory exists)
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Initialize monitoring database if available
+monitoring_db = None
+if MONITORING_DB_AVAILABLE:
+    monitoring_db = MonitoringDB()
 
 # Global variables
 model = None
@@ -76,7 +123,10 @@ def init_database():
                 prediction INTEGER,
                 prediction_name TEXT,
                 confidence REAL,
-                response_time_ms REAL
+                response_time_ms REAL,
+                model_version TEXT,
+                user_agent TEXT,
+                ip_address TEXT
             )
         """
         )
@@ -124,14 +174,16 @@ def load_model_and_scaler():
         return False
 
 
-def log_prediction(
+def log_prediction_enhanced(
     request_id: str,
     features: list,
     prediction: int,
     confidence: float,
     response_time: float,
+    user_agent: str = "",
+    ip_address: str = "",
 ):
-    """Log prediction to database"""
+    """Enhanced logging function with additional metadata"""
     try:
         conn = sqlite3.connect("logs/predictions.db")
         cursor = conn.cursor()
@@ -139,8 +191,9 @@ def log_prediction(
         cursor.execute(
             """
             INSERT INTO predictions 
-            (id, timestamp, features, prediction, prediction_name, confidence, response_time_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, timestamp, features, prediction, prediction_name, confidence, 
+             response_time_ms, model_version, user_agent, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 request_id,
@@ -150,6 +203,9 @@ def log_prediction(
                 class_names[prediction],
                 confidence,
                 response_time,
+                model_info.get("model_type", "unknown"),
+                user_agent,
+                ip_address,
             ),
         )
 
@@ -157,6 +213,17 @@ def log_prediction(
         conn.close()
     except Exception as e:
         logger.error(f"Error logging prediction: {e}")
+
+
+def log_prediction(
+    request_id: str,
+    features: list,
+    prediction: int,
+    confidence: float,
+    response_time: float,
+):
+    """Basic logging function for backward compatibility"""
+    log_prediction_enhanced(request_id, features, prediction, confidence, response_time)
 
 
 # Initialize on startup
@@ -178,6 +245,8 @@ async def root():
             "predict": "/predict",
             "health": "/health",
             "metrics": "/metrics",
+            "dashboard": "/dashboard",
+            "monitoring": "/monitoring/dashboard",
             "docs": "/docs",
         },
     }
@@ -195,15 +264,29 @@ async def health_check():
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(request: PredictionRequest, background_tasks: BackgroundTasks):
-    """Make predictions on iris features"""
+async def predict(
+    request: PredictionRequest, background_tasks: BackgroundTasks, req: Request = None
+):
+    """Make predictions on iris features with enhanced monitoring"""
     global prediction_count, last_prediction_time
 
     if model is None or scaler is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     start_time_pred = time.time()
-    request_id = str(uuid.uuid4())
+    request_id = (
+        getattr(req.state, "request_id", str(uuid.uuid4()))
+        if req
+        else str(uuid.uuid4())
+    )
+
+    # Get client info if request object is available
+    user_agent = req.headers.get("user-agent", "") if req else ""
+    ip_address = req.client.host if req else ""
+
+    # Increment active connections if Prometheus is available
+    if PROMETHEUS_AVAILABLE:
+        metrics_collector.increment_connections()
 
     try:
         predictions = []
@@ -224,8 +307,10 @@ async def predict(request: PredictionRequest, background_tasks: BackgroundTasks)
             # Scale features
             feature_scaled = scaler.transform(feature_array)
 
-            # Make prediction
+            # Make prediction with timing
+            pred_start = time.time()
             prediction = model.predict(feature_scaled)[0]
+            pred_duration = time.time() - pred_start
 
             # Get prediction probabilities
             if hasattr(model, "predict_proba"):
@@ -249,20 +334,71 @@ async def predict(request: PredictionRequest, background_tasks: BackgroundTasks)
 
             predictions.append(prediction_result)
 
-            # Log prediction in background
-            background_tasks.add_task(
-                log_prediction,
-                request_id,
-                [
-                    features.sepal_length,
-                    features.sepal_width,
-                    features.petal_length,
-                    features.petal_width,
-                ],
-                prediction,
-                confidence,
-                (time.time() - start_time_pred) * 1000,
-            )
+            # Record Prometheus metrics if available
+            if PROMETHEUS_AVAILABLE:
+                metrics_collector.record_prediction(
+                    model_type=model_info.get("model_type", "unknown"),
+                    prediction_class=class_names[prediction],
+                    duration=pred_duration,
+                )
+
+            # Enhanced logging with more details
+            if MONITORING_DB_AVAILABLE and monitoring_db:
+                try:
+                    monitoring_db.log_prediction(
+                        {
+                            "id": request_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "features": [
+                                features.sepal_length,
+                                features.sepal_width,
+                                features.petal_length,
+                                features.petal_width,
+                            ],
+                            "prediction": prediction,
+                            "prediction_name": class_names[prediction],
+                            "confidence": confidence,
+                            "response_time_ms": (time.time() - start_time_pred) * 1000,
+                            "model_version": model_info.get("model_type", "unknown"),
+                            "user_agent": user_agent,
+                            "ip_address": ip_address,
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error with enhanced logging: {e}")
+                    # Fall back to basic logging
+                    background_tasks.add_task(
+                        log_prediction_enhanced,
+                        request_id,
+                        [
+                            features.sepal_length,
+                            features.sepal_width,
+                            features.petal_length,
+                            features.petal_width,
+                        ],
+                        prediction,
+                        confidence,
+                        (time.time() - start_time_pred) * 1000,
+                        user_agent,
+                        ip_address,
+                    )
+            else:
+                # Basic logging if enhanced monitoring not available
+                background_tasks.add_task(
+                    log_prediction_enhanced,
+                    request_id,
+                    [
+                        features.sepal_length,
+                        features.sepal_width,
+                        features.petal_length,
+                        features.petal_width,
+                    ],
+                    prediction,
+                    confidence,
+                    (time.time() - start_time_pred) * 1000,
+                    user_agent,
+                    ip_address,
+                )
 
         # Update metrics
         prediction_count += len(request.features)
@@ -273,6 +409,7 @@ async def predict(request: PredictionRequest, background_tasks: BackgroundTasks)
             model_info={
                 "model_type": model_info.get("model_type", "unknown"),
                 "accuracy": model_info.get("metrics", {}).get("accuracy", None),
+                "version": "1.0.0",
             },
             request_id=request_id,
         )
@@ -281,13 +418,40 @@ async def predict(request: PredictionRequest, background_tasks: BackgroundTasks)
         return response
 
     except Exception as e:
-        logger.error(f"Error making prediction: {e}")
+        logger.error(
+            f"Error making prediction: {e}",
+            extra={"request_id": request_id} if req else {},
+        )
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+    finally:
+        # Decrement active connections if Prometheus is available
+        if PROMETHEUS_AVAILABLE:
+            metrics_collector.decrement_connections()
 
 
-@app.get("/metrics", response_model=MetricsResponse)
+@app.get("/metrics")
 async def get_metrics():
-    """Get API metrics"""
+    """Get metrics - Prometheus format if available, otherwise basic metrics"""
+    if PROMETHEUS_AVAILABLE:
+        return Response(
+            content=metrics_collector.get_metrics(),
+            media_type=metrics_collector.get_content_type(),
+        )
+    else:
+        # Return basic metrics in JSON format
+        uptime = time.time() - start_time
+
+        return {
+            "total_predictions": prediction_count,
+            "model_accuracy": model_info.get("metrics", {}).get("accuracy", None),
+            "uptime_seconds": uptime,
+            "last_prediction_time": last_prediction_time,
+        }
+
+
+@app.get("/metrics/json", response_model=MetricsResponse)
+async def get_basic_metrics():
+    """Get basic API metrics in JSON format"""
     uptime = time.time() - start_time
 
     return MetricsResponse(
@@ -308,20 +472,55 @@ async def get_model_info():
         "model_info": model_info,
         "model_loaded": model is not None,
         "scaler_loaded": scaler is not None,
+        "monitoring_features": {
+            "prometheus_available": PROMETHEUS_AVAILABLE,
+            "monitoring_db_available": MONITORING_DB_AVAILABLE,
+            "enhanced_logging_available": ENHANCED_LOGGING_AVAILABLE,
+            "monitoring_middleware_available": MONITORING_MIDDLEWARE_AVAILABLE,
+        },
     }
 
 
 @app.get("/dashboard")
 async def dashboard():
     """Serve monitoring dashboard"""
-    return FileResponse("static/dashboard.html")
+    if os.path.exists("static/dashboard.html"):
+        return FileResponse("static/dashboard.html")
+    else:
+        return {"message": "Dashboard not available - static/dashboard.html not found"}
 
 
 @app.get("/monitoring/dashboard")
 async def get_monitoring_dashboard():
-    """Get monitoring dashboard data"""
+    """Get monitoring dashboard data with enhanced features"""
     try:
-        # Get basic stats from database
+        # Enhanced monitoring if available
+        if MONITORING_DB_AVAILABLE and monitoring_db:
+            try:
+                # Get prediction stats
+                prediction_stats = monitoring_db.get_prediction_stats(hours=24)
+
+                # Get API metrics
+                api_metrics = monitoring_db.get_api_metrics(hours=24)
+
+                # System info
+                uptime = time.time() - start_time
+
+                return {
+                    "system": {
+                        "uptime_seconds": uptime,
+                        "total_predictions": prediction_count,
+                        "last_prediction": last_prediction_time,
+                    },
+                    "predictions": prediction_stats,
+                    "api_metrics": api_metrics,
+                    "model_info": model_info,
+                }
+            except Exception as e:
+                logger.error(f"Error with enhanced monitoring: {e}")
+                # Fall back to basic monitoring
+
+        # Basic monitoring fallback
         conn = sqlite3.connect("logs/predictions.db")
         cursor = conn.cursor()
 
@@ -355,7 +554,6 @@ async def get_monitoring_dashboard():
         )
 
         distribution = dict(cursor.fetchall())
-
         conn.close()
 
         # System info
@@ -382,6 +580,11 @@ async def get_monitoring_dashboard():
                 }
             ],
             "model_info": model_info,
+            "monitoring_status": {
+                "prometheus_available": PROMETHEUS_AVAILABLE,
+                "monitoring_db_available": MONITORING_DB_AVAILABLE,
+                "enhanced_logging_available": ENHANCED_LOGGING_AVAILABLE,
+            },
         }
     except Exception as e:
         logger.error(f"Error getting monitoring dashboard: {e}")
