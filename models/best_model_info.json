@@ -1,0 +1,14 @@
+{
+  "model_type": "svm",
+  "params": {
+    "C": 1.0,
+    "kernel": "linear"
+  },
+  "metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0
+  },
+  "run_id": "8ede7c568cfb4aaa9354d33f55ec3af7"
+}
