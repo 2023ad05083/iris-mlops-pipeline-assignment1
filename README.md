@@ -22,3 +22,6 @@ A complete MLOps pipeline for Iris flower classification with experiment trackin
 - `POST /predict`: Make predictions
 - `GET /health`: Health check
 - `GET /metrics`: Monitoring metrics
+
+- mlflow ui --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0 --port 5000
+- uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
