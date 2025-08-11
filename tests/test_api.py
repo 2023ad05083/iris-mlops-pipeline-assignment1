@@ -35,16 +35,22 @@ def test_api_endpoints(mock_model_info, mock_scaler, mock_model, mock_load):
     # Test metrics endpoint - handle both JSON and Prometheus formats
     response = client.get("/metrics")
     assert response.status_code == 200
-    
+
     # Check if response is JSON format (basic metrics)
     try:
         metrics_data = response.json()
         # Should have basic metrics structure
-        assert any(key in metrics_data for key in ["total_predictions", "uptime_seconds", "model_accuracy"])
+        assert any(
+            key in metrics_data
+            for key in ["total_predictions", "uptime_seconds", "model_accuracy"]
+        )
     except json.JSONDecodeError:
         # If not JSON, should be Prometheus format (text)
         response_text = response.text
-        assert any(metric in response_text for metric in ["total_predictions", "uptime_seconds", "api_requests"])
+        assert any(
+            metric in response_text
+            for metric in ["total_predictions", "uptime_seconds", "api_requests"]
+        )
 
 
 @patch("api.main.model")
@@ -81,7 +87,7 @@ def test_prediction_endpoint(mock_model_info, mock_scaler, mock_model):
     assert "predictions" in result
     assert "request_id" in result
     assert len(result["predictions"]) == 1
-    
+
     # Verify prediction structure
     prediction = result["predictions"][0]
     assert "prediction" in prediction
@@ -137,14 +143,17 @@ def test_missing_model_scenario():
 
 
 @patch("api.main.model")
-@patch("api.main.scaler") 
+@patch("api.main.scaler")
 @patch("api.main.model_info")
 def test_batch_prediction(mock_model_info, mock_scaler, mock_model):
     """Test batch prediction with multiple samples"""
     # Setup mocks
     mock_model.predict.return_value = np.array([0, 1])
     mock_model.predict_proba.return_value = np.array([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1]])
-    mock_scaler.transform.side_effect = [np.array([[1, 2, 3, 4]]), np.array([[5, 6, 7, 8]])]
+    mock_scaler.transform.side_effect = [
+        np.array([[1, 2, 3, 4]]),
+        np.array([[5, 6, 7, 8]]),
+    ]
     mock_model_info.get.return_value = {"accuracy": 0.95, "model_type": "test"}
 
     from api.main import app
@@ -165,7 +174,7 @@ def test_batch_prediction(mock_model_info, mock_scaler, mock_model):
                 "sepal_width": 2.9,
                 "petal_length": 4.3,
                 "petal_width": 1.3,
-            }
+            },
         ]
     }
 
