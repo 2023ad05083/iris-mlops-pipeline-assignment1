@@ -1,7 +1,7 @@
 import time
 import uuid
 from datetime import datetime
-from fastapi import Request, Response
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 from src.utils.monitoring_db import MonitoringDB

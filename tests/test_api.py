@@ -1,8 +1,6 @@
-import pytest
 from fastapi.testclient import TestClient
-import json
 import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 # We need to mock the model loading since we don't have trained models in tests

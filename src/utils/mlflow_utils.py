@@ -1,7 +1,6 @@
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
-import os
 import logging
 from configs.mlflow_config import (
     MLFLOW_TRACKING_URI,

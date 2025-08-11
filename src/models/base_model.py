@@ -1,12 +1,9 @@
 from abc import ABC, abstractmethod
-import pandas as pd
-import numpy as np
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
     f1_score,
-    classification_report,
 )
 import logging
 
@@ -23,7 +20,6 @@ class BaseModel(ABC):
     @abstractmethod
     def create_model(self, **params):
         """Create model instance with parameters"""
-        pass
 
     def train(self, X_train, y_train, **params):
         """Train the model"""

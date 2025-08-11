@@ -1,12 +1,10 @@
 import pandas as pd
-import numpy as np
 import joblib
 import json
 from pathlib import Path
 import logging
 
 import sys
-import os
 from pathlib import Path
 
 # Add project root to Python path
